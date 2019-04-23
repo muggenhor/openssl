@@ -26,6 +26,10 @@
 #define ASYNC_JOB_PAUSING   1
 #define ASYNC_JOB_PAUSED    2
 #define ASYNC_JOB_STOPPING  3
+#define ASYNC_JOB_READY     4
+
+#define ASYNC_JOB_OWN_POOL  0
+#define ASYNC_JOB_OWN_USER  1
 
 static CRYPTO_THREAD_LOCAL ctxkey;
 static CRYPTO_THREAD_LOCAL poolkey;
@@ -75,6 +79,26 @@ static int async_ctx_free(void)
     return 1;
 }
 
+int ASYNC_job_size(void)
+{
+    return ASYNC_is_capable() ? sizeof(ASYNC_JOB) : -1;
+}
+
+int ASYNC_job_init(ASYNC_JOB *job)
+{
+    memset(job, 0, ASYNC_job_size());
+    job->status = ASYNC_JOB_READY;
+    job->owner = ASYNC_JOB_OWN_USER;
+
+    if (! async_fibre_makecontext(&job->fibrectx)) {
+        ASYNCerr(ASYNC_F_ASYNC_JOB_INIT, ERR_R_MALLOC_FAILURE);
+        ASYNC_job_deinit(job);
+        return 0;
+    }
+
+    return 1;
+}
+
 static ASYNC_JOB *async_job_new(void)
 {
     ASYNC_JOB *job = NULL;
@@ -86,15 +110,23 @@ static ASYNC_JOB *async_job_new(void)
     }
 
     job->status = ASYNC_JOB_RUNNING;
+    job->owner = ASYNC_JOB_OWN_POOL;
 
     return job;
+}
+
+void ASYNC_job_deinit(ASYNC_JOB *job)
+{
+    if (job != NULL) {
+        OPENSSL_free(job->funcargs);
+        async_fibre_free(&job->fibrectx);
+    }
 }
 
 static void async_job_free(ASYNC_JOB *job)
 {
     if (job != NULL) {
-        OPENSSL_free(job->funcargs);
-        async_fibre_free(&job->fibrectx);
+        ASYNC_job_deinit(job);
         OPENSSL_free(job);
     }
 }
@@ -135,20 +167,24 @@ static ASYNC_JOB *async_get_pool_job(void) {
 static void async_release_job(ASYNC_JOB *job) {
     async_pool *pool;
 
-    pool = (async_pool *)CRYPTO_THREAD_get_local(&poolkey);
     OPENSSL_free(job->funcargs);
     job->funcargs = NULL;
-    sk_ASYNC_JOB_push(pool->jobs, job);
+
+    if (job->owner == ASYNC_JOB_OWN_POOL) {
+        pool = (async_pool *)CRYPTO_THREAD_get_local(&poolkey);
+        sk_ASYNC_JOB_push(pool->jobs, job);
+    } else {
+        job->status = ASYNC_JOB_READY;
+    }
 }
 
 void async_start_func(void)
 {
-    ASYNC_JOB *job;
-    async_ctx *ctx = async_get_ctx();
-
     while (1) {
+        async_ctx *ctx = async_get_ctx();
+        ASYNC_JOB *job = ctx->currjob;
+
         /* Run the job */
-        job = ctx->currjob;
         job->ret = job->func(job->funcargs);
 
         /* Stop the job */
@@ -211,16 +247,19 @@ int ASYNC_start_job(ASYNC_JOB **job, ASYNC_WAIT_CTX *wctx, int *ret,
                 continue;
             }
 
-            /* Should not happen */
-            ASYNCerr(ASYNC_F_ASYNC_START_JOB, ERR_R_INTERNAL_ERROR);
-            async_release_job(ctx->currjob);
-            ctx->currjob = NULL;
-            *job = NULL;
-            return ASYNC_ERR;
+            if (ctx->currjob->status != ASYNC_JOB_READY) {
+                /* Should not happen */
+                ASYNCerr(ASYNC_F_ASYNC_START_JOB, ERR_R_INTERNAL_ERROR);
+                async_release_job(ctx->currjob);
+                ctx->currjob = NULL;
+                *job = NULL;
+                return ASYNC_ERR;
+            }
         }
 
         /* Start a new job */
-        if ((ctx->currjob = async_get_pool_job()) == NULL)
+        if (ctx->currjob == NULL
+                && (ctx->currjob = async_get_pool_job()) == NULL)
             return ASYNC_NO_JOBS;
 
         if (args != NULL) {

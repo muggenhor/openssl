@@ -42,6 +42,7 @@ struct async_job_st {
     void *funcargs;
     int ret;
     int status;
+    int owner;
     ASYNC_WAIT_CTX *waitctx;
 };
 

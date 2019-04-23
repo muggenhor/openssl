@@ -74,6 +74,11 @@ int ASYNC_WAIT_CTX_clear_fd(ASYNC_WAIT_CTX *ctx, const void *key);
 
 int ASYNC_is_capable(void);
 
+// amount of bytes to zero-allocate to get a default constructed, user-owned, ASYNC_JOB instance
+int ASYNC_job_size(void);
+int ASYNC_job_init(ASYNC_JOB *job);
+void ASYNC_job_deinit(ASYNC_JOB *job);
+
 int ASYNC_start_job(ASYNC_JOB **job, ASYNC_WAIT_CTX *ctx, int *ret,
                     int (*func)(void *), void *args, size_t size);
 int ASYNC_pause_job(void);

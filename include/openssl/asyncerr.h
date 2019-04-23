@@ -25,6 +25,7 @@ int ERR_load_ASYNC_strings(void);
  */
 # define ASYNC_F_ASYNC_CTX_NEW                            100
 # define ASYNC_F_ASYNC_INIT_THREAD                        101
+# define ASYNC_F_ASYNC_JOB_INIT                           107
 # define ASYNC_F_ASYNC_JOB_NEW                            102
 # define ASYNC_F_ASYNC_PAUSE_JOB                          103
 # define ASYNC_F_ASYNC_START_FUNC                         104
